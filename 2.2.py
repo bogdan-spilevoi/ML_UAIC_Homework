@@ -6,9 +6,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 
 
-# =========================
-#  IO: Robust CSV reading
-# =========================
 
 def read_receipts_csv(path: str) -> pd.DataFrame:
     """
@@ -27,9 +24,6 @@ def read_receipts_csv(path: str) -> pd.DataFrame:
     return df
 
 
-# ==========================================
-#  Your own Logistic Regression (GD)
-# ==========================================
 
 def sigmoid(z: np.ndarray) -> np.ndarray:
     z = np.clip(z, -50, 50)
@@ -43,7 +37,6 @@ class LogisticRegressionGD:
         self.w: np.ndarray | None = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        # Add bias column
         Xb = np.c_[np.ones(X.shape[0]), X]
         self.w = np.zeros(Xb.shape[1], dtype=float)
 
@@ -63,9 +56,6 @@ class LogisticRegressionGD:
         return (self.predict_proba(X) >= threshold).astype(int)
 
 
-# =========================
-#  Feature engineering
-# =========================
 
 def standardize_train_test(X_train: np.ndarray, X_test: np.ndarray):
     mean = X_train.mean(axis=0)
@@ -95,22 +85,18 @@ def build_features_for_sauce(
 
     df = df.copy()
 
-    # Clean up basic types
     df[product_col] = df[product_col].astype(str).str.strip()
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df[price_col] = pd.to_numeric(df[price_col], errors="coerce").fillna(0.0)
 
-    # Receipt id consistent (int if possible, else str)
     try:
         df[receipt_col] = df[receipt_col].astype("int64")
     except Exception:
         df[receipt_col] = df[receipt_col].astype(str)
 
-    # Master index = all receipts
     receipt_ids = df[receipt_col].dropna().drop_duplicates().tolist()
     master_index = pd.Index(receipt_ids, name=receipt_col)
 
-    # y_s = 1 if sauce present in receipt
     y_s = (
         df.groupby(receipt_col)[product_col]
           .apply(lambda s: int((s == sauce_name).any()))
@@ -118,7 +104,6 @@ def build_features_for_sauce(
     )
     y_s.name = f"y__{sauce_name}"
 
-    # Exclusions for features (anti-leakage)
     if remove_all_sauces_from_features:
         excluded = set(sauces_list)
     else:
@@ -126,7 +111,6 @@ def build_features_for_sauce(
 
     df_feat = df[~df[product_col].isin(excluded)].copy()
 
-    # Bag-of-products (counts)
     product_counts = pd.crosstab(
         index=df_feat[receipt_col],
         columns=df_feat[product_col]
@@ -135,7 +119,6 @@ def build_features_for_sauce(
     if use_binary_products:
         product_counts = (product_counts > 0).astype(int)
 
-    # Aggregations (computed on df_feat so the "cart" stays sauce-free)
     agg = (
         df_feat.groupby(receipt_col).agg(
             cart_size=(product_col, "size"),
@@ -146,7 +129,6 @@ def build_features_for_sauce(
         .fillna(0)
     )
 
-    # Time features (not leakage)
     receipt_time = (
         df.groupby(receipt_col)[date_col].min()
           .reindex(master_index)
@@ -166,9 +148,6 @@ def build_features_for_sauce(
     return X_s, y_s
 
 
-# =========================
-#  Training multiple models
-# =========================
 
 def split_receipts(receipt_ids: list, test_size=0.2, random_state=42) -> tuple[list, list]:
     tr, te = train_test_split(
@@ -201,7 +180,6 @@ def train_models_for_all_sauces(
          'train_ids': list, 'test_ids': list,
       }
     """
-    # Use a shared receipt split for all sauces (so evaluation is comparable)
     df_tmp = df.copy()
     try:
         df_tmp["id_bon"] = df_tmp["id_bon"].astype("int64")
@@ -227,7 +205,6 @@ def train_models_for_all_sauces(
         X_test_df = X_s.loc[test_ids]
         y_test = y_s.loc[test_ids].values.astype(int)
 
-        # Standardize per-sauce model (same columns for that sauce)
         X_train = X_train_df.values
         X_test = X_test_df.values
         X_train_std, X_test_std, mean, std = standardize_train_test(X_train, X_test)
@@ -235,7 +212,6 @@ def train_models_for_all_sauces(
         model = LogisticRegressionGD(lr=lr, n_iter=n_iter)
         model.fit(X_train_std, y_train)
 
-        # Optional: small sanity AUC (only if both classes present in test)
         try:
             proba = model.predict_proba(X_test_std)
             if len(np.unique(y_test)) == 2:
@@ -258,9 +234,6 @@ def train_models_for_all_sauces(
     return models
 
 
-# =========================
-#  Recommendation + metrics
-# =========================
 
 def get_receipt_item_sets(
     df: pd.DataFrame,
@@ -323,11 +296,10 @@ def build_features_from_cart(
         if item in row.columns:
             row.at[0, item] += 1
 
-    # agregări simple (coerente cu training)
     row.at[0, "cart_size"] = len(cart_items)
     row.at[0, "distinct_products"] = len(set(cart_items))
-    row.at[0, "total_value"] = 0.0      # necunoscut → 0
-    row.at[0, "day_of_week"] = 0         # necunoscut → 0
+    row.at[0, "total_value"] = 0.0
+    row.at[0, "day_of_week"] = 0 
     row.at[0, "is_weekend"] = 0
 
     return row
@@ -360,7 +332,6 @@ def evaluate_hit_precision_at_k(
     k: int = 3,
     product_col="retail_product_name",
     receipt_col="id_bon",
-    # If True: evaluation simulates "cart without sauces" (recommended)
     simulate_cart_without_sauces: bool = True,
     use_binary_products: bool = False,
     remove_all_sauces_from_features: bool = True,
@@ -373,15 +344,13 @@ def evaluate_hit_precision_at_k(
       Precision@K = |topK ∩ true_sauces| / K
     """
 
-    # Shared test ids from any model
     any_pack = next(iter(models.values()))
     test_ids = any_pack["test_ids"]
 
-    # Precompute item sets per receipt
+
     item_sets = get_receipt_item_sets(df, product_col=product_col, receipt_col=receipt_col)
 
-    # Build ONE "base" feature matrix for recommendation rows.
-    # We can use features built for an arbitrary sauce (same logic: sauces removed from cart features).
+
     base_sauce = sauces_list[0]
     X_base, _ = build_features_for_sauce(
         df,
@@ -400,16 +369,15 @@ def evaluate_hit_precision_at_k(
         items = item_sets.loc[rid]
         true_sauces = set(items).intersection(set(sauces_list))
 
-        # if receipt contains no sauce, skip (no "ground truth" sauce to hit)
         if len(true_sauces) == 0:
             continue
 
         if simulate_cart_without_sauces:
-            sauces_in_cart = set()  # assume user hasn't chosen any sauce yet
+            sauces_in_cart = set()
         else:
-            sauces_in_cart = true_sauces.copy()  # would remove already-present sauces from recs (rarely used)
+            sauces_in_cart = true_sauces.copy()
 
-        X_row = X_base.loc[[rid]]  # single-row DF
+        X_row = X_base.loc[[rid]]
         topk = recommend_top_k_for_receipt(models, X_row, sauces_in_cart, k=k)
         rec_sauces = {s for s, _ in topk}
 
@@ -486,9 +454,7 @@ def evaluate_popularity_baseline(
             float(np.mean(precs)) if precs else 0.0)
 
 
-# =========================
-#  Main
-# =========================
+
 
 def main():
     df = read_receipts_csv("ap_dataset.csv")
@@ -501,6 +467,7 @@ def main():
         "Cheddar Sauce",
         "Pink Sauce",
         "Spicy Sauce",
+        "Extra Cheddar Sauce",
     ]
 
     models = train_models_for_all_sauces(
@@ -529,8 +496,8 @@ def main():
     train_ids = any_pack["train_ids"]
     test_ids = any_pack["test_ids"]
 
-    top3_pop = popularity_topk_from_train(df, SAUCES, train_ids, k=7)
-    hit3_b, prec3_b = evaluate_popularity_baseline(df, SAUCES, test_ids, top3_pop, k=7)
+    top3_pop = popularity_topk_from_train(df, SAUCES, train_ids, k=8)
+    hit3_b, prec3_b = evaluate_popularity_baseline(df, SAUCES, test_ids, top3_pop, k=8)
     print(f"[Popularity baseline] Top3={top3_pop}  Hit@3={hit3_b:.4f}  Precision@3={prec3_b:.4f}")
 
     my_cart = [
@@ -538,11 +505,11 @@ def main():
         "Pepsi Cola 0.25L Doze",
     ]
 
-    topk = recommend_for_cart(models, my_cart, k=7)
+    topk = recommend_for_cart(models, my_cart, k=8)
 
     print("\n=== Manual cart recommendation ===")
     print("Cart:", my_cart)
-    print("Top-3 sauces:")
+    print("Top-k sauces:")
     for s, p in topk:
         print(f"  {s}: P={p:.3f}")
 

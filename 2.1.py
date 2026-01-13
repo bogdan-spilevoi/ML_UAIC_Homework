@@ -33,7 +33,6 @@ def build_dataset_for_crazy_sauce_given_schnitzel(
     product_id_col: str = "retail_product_id",
     use_binary_products: bool = False,
 ):
-    # --- 0) Validări minime ---
     required = [product_col, receipt_col, date_col, price_col, product_id_col]
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -41,21 +40,16 @@ def build_dataset_for_crazy_sauce_given_schnitzel(
 
     df = df.copy()
 
-    # curățare nume produs (important!)
     df[product_col] = df[product_col].astype(str).str.strip()
 
-    # tipuri
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df[price_col] = pd.to_numeric(df[price_col], errors="coerce").fillna(0.0)
 
-    # receipt id consistent
-    # (dacă nu merge int, îl lăsăm string)
     try:
         df[receipt_col] = df[receipt_col].astype("int64")
     except Exception:
         df[receipt_col] = df[receipt_col].astype(str)
 
-    # --- 1) Bonuri care conțin schnitzel ---
     schnitzel_bons = (
         df.loc[df[product_col].eq(schnitzel_name), receipt_col]
           .dropna()
@@ -68,7 +62,6 @@ def build_dataset_for_crazy_sauce_given_schnitzel(
     df_cs = df[df[receipt_col].isin(schnitzel_bons)].copy()
     master_index = pd.Index(schnitzel_bons, name=receipt_col)
 
-    # --- 2) y ---
     y = (
         df_cs.groupby(receipt_col)[product_col]
              .apply(lambda s: int((s == sauce_name).any()))
@@ -76,11 +69,9 @@ def build_dataset_for_crazy_sauce_given_schnitzel(
     )
     y.name = "y"
 
-    # --- 3) Vector produse (fără schnitzel și sauce) ---
     excluded = {schnitzel_name, sauce_name}
     df_products = df_cs[~df_cs[product_col].isin(excluded)].copy()
 
-    # AICI e partea robustă: crosstab
     product_counts = pd.crosstab(
         index=df_products[receipt_col],
         columns=df_products[product_col]
@@ -89,7 +80,6 @@ def build_dataset_for_crazy_sauce_given_schnitzel(
     if use_binary_products:
         product_counts = (product_counts > 0).astype(int)
 
-    # --- 4) Agregări pe bon ---
     agg_features = (
         df_cs.groupby(receipt_col).agg(
             cart_size=(product_col, "size"),
@@ -100,7 +90,6 @@ def build_dataset_for_crazy_sauce_given_schnitzel(
         .fillna(0)
     )
 
-    # --- 5) Timp ---
     receipt_time = (
         df_cs.groupby(receipt_col)[date_col].min()
              .reindex(master_index)
@@ -113,11 +102,9 @@ def build_dataset_for_crazy_sauce_given_schnitzel(
         index=master_index
     )
 
-    # --- 6) X final ---
     X = product_counts.join(agg_features).join(time_features)
     X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-    # sanity
     assert X.index.equals(y.index), "Index mismatch între X și y!"
 
     return X, y
